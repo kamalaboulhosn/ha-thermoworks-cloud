@@ -1,6 +1,7 @@
 """Coordinates data updates from the Thermoworks Cloud API."""
 
 from dataclasses import dataclass
+import asyncio
 from datetime import timedelta
 import logging
 
@@ -74,6 +75,7 @@ class ThermoworksCoordinator(DataUpdateCoordinator[ThermoworksData]):
             referer=provider_config["referer"],
         )
         self.api = None
+        self._known_channels: dict[str, list[int]] = {}
 
     async def async_update_data(self) -> ThermoworksData:
         """Fetch data from API endpoint.
@@ -117,35 +119,68 @@ class ThermoworksCoordinator(DataUpdateCoordinator[ThermoworksData]):
                     # Skip this device as it's missing critical data
                     continue
 
+                device_id = device.get_identifier()
                 device_channels = []
-                # According to the observed behavior, channels seem to be 1 indexed
-                for channel in range(1, 10):
-                    try:
-                        api_channel = await self.api.get_device_channel(
-                            device_serial=device.serial,
-                            channel=str(channel)
-                        )
+
+                if device_id in self._known_channels:
+                    channels_to_fetch = self._known_channels[device_id]
+                    tasks = [
+                        self.api.get_device_channel(device_serial=device.serial, channel=str(ch))
+                        for ch in channels_to_fetch
+                    ]
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    for channel_num, result in zip(channels_to_fetch, results):
+                        if isinstance(result, Exception):
+                            if isinstance(result, ResourceNotFoundError):
+                                # Invalidate cache to rediscover channels next poll if configuration changed
+                                self._known_channels.pop(device_id, None)
+                                _LOGGER.debug("Resource not found, clearing channel cache for %s", device.display_name())
+                            else:
+                                _LOGGER.error("Error fetching channel %s for device %s: %s", channel_num, device.display_name(), result)
+                            continue
+
                         try:
-                            channel_data = ThermoworksChannel.from_api_channel(
-                                api_channel)
+                            channel_data = ThermoworksChannel.from_api_channel(result)
                             device_channels.append(channel_data)
                             _LOGGER.debug(
                                 "Retrieved channel %s for device %s",
                                 channel_data.display_name(), device.display_name())
                         except MissingRequiredAttributeError as err:
-                            _LOGGER.error("Channel %s for device %s: %s",
-                                          channel, device.display_name(), err)
-                            # Skip this channel as it's missing critical data
-                    except ResourceNotFoundError:
-                        _LOGGER.debug("No more channels found for device %s after channel %s",
-                                      device.display_name(), channel-1)
-                        # Go until there are no more
-                        break
-                    except Exception as channel_err:
-                        _LOGGER.error("Error fetching channel %s for device %s: %s",
-                                      channel, device.display_name(), channel_err)
-                        # Continue with next channel
-                        continue
+                            _LOGGER.error("Channel %s for device %s: %s", channel_num, device.display_name(), err)
+                else:
+                    discovered_channels = []
+                    # According to the observed behavior, channels seem to be 1 indexed
+                    for channel in range(1, 10):
+                        try:
+                            api_channel = await self.api.get_device_channel(
+                                device_serial=device.serial,
+                                channel=str(channel)
+                            )
+                            try:
+                                channel_data = ThermoworksChannel.from_api_channel(
+                                    api_channel)
+                                device_channels.append(channel_data)
+                                discovered_channels.append(channel)
+                                _LOGGER.debug(
+                                    "Retrieved channel %s for device %s",
+                                    channel_data.display_name(), device.display_name())
+                            except MissingRequiredAttributeError as err:
+                                _LOGGER.error("Channel %s for device %s: %s",
+                                              channel, device.display_name(), err)
+                        except ResourceNotFoundError:
+                            _LOGGER.debug("No more channels found for device %s after channel %s",
+                                          device.display_name(), channel-1)
+                            # Go until there are no more
+                            break
+                        except Exception as channel_err:
+                            _LOGGER.error("Error fetching channel %s for device %s: %s",
+                                          channel, device.display_name(), channel_err)
+                            # Continue with next channel
+                            continue
+
+                    if discovered_channels:
+                        self._known_channels[device_id] = discovered_channels
 
                 device_channels_by_device[device.get_identifier()] = device_channels
                 _LOGGER.debug("Found %d channels for device %s",

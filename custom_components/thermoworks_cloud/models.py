@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from types import NoneType
+from types import NoneType, UnionType
 from typing import Any, Optional, Protocol, Type, TypeGuard, Union, get_args, get_origin, get_type_hints
 from thermoworks_cloud.models import Device, DeviceChannel
 
@@ -10,10 +10,10 @@ from .exceptions import MissingRequiredAttributeError
 
 
 def is_optional_type(tp: Any) -> bool:
-    """Returns True if the type is Optional[...]"""
+    """Returns True if the type is Optional[...] or ... | None"""
     origin = get_origin(tp)
     args = get_args(tp)
-    return origin is Union and NoneType in args
+    return origin in (Union, UnionType) and NoneType in args
 
 
 def has_required_attributes(obj: Any, protocol_cls: Type) -> bool:
@@ -88,7 +88,7 @@ class ThermoworksDevice(BaseDevice):
     def display_name(self) -> str:
         """Return the display name of the device."""
         # {user given name} ({rfx gateway, rfx meat, node, etc.} - {usually serial number})
-        return f"{self.label or "unnamed device"} ({self.device_name or "unknown device"} - {self.get_identifier()})"
+        return f"{self.label or 'unnamed device'} ({self.device_name or 'unknown device'} - {self.get_identifier()})"
 
 
 class DeviceWithBattery(ThermoworksDevice):
@@ -165,4 +165,4 @@ class ThermoworksChannel:
     def display_name(self) -> str:
         """Return the display name of the channel."""
         # {user given name} (Ch. {channel number})
-        return f"{self.label or "unnamed channel"} (Ch. {self.number})"
+        return f"{self.label or 'unnamed channel'} (Ch. {self.number})"

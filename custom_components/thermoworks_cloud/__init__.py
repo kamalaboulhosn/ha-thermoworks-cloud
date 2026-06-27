@@ -5,14 +5,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from datetime import timedelta
+
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import CONF_SCAN_INTERVAL, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DOMAIN
+from .const import DEFAULT_SCAN_INTERVAL_SECONDS, DOMAIN
 from .coordinator import ThermoworksCoordinator
 
 # The list of platforms provided by this integration
@@ -27,10 +29,11 @@ class RuntimeData:
     cancel_update_listener: Callable
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Thermoworks Cloud from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
+ThermoworksConfigEntry = ConfigEntry[RuntimeData]
 
+
+async def async_setup_entry(hass: HomeAssistant, entry: ThermoworksConfigEntry) -> bool:
+    """Set up Thermoworks Cloud from a config entry."""
     # Initialise the coordinator that manages data updates from your api.
     # This is defined in coordinator.py
     coordinator = ThermoworksCoordinator(hass, entry)
@@ -47,11 +50,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # See config_flow for defining an options setting that shows up as configure on the integration.
     cancel_update_listener = entry.add_update_listener(_async_update_listener)
 
-    # Add the coordinator and update listener to hass data to make
-    # accessible throughout your integration
-    # Note: this will change on HA2024.6 to save on the config entry.
-    hass.data[DOMAIN][entry.entry_id] = RuntimeData(
-        coordinator, cancel_update_listener)
+    # Store coordinator and update listener directly on the config entry
+    entry.runtime_data = RuntimeData(coordinator, cancel_update_listener)
 
     # Setup platforms (based on the list of entity types in PLATFORMS defined above)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -60,40 +60,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def _async_update_listener(hass: HomeAssistant, config_entry):
+async def _async_update_listener(hass: HomeAssistant, entry: ThermoworksConfigEntry) -> None:
     """Handle config options update."""
-    # Reload the integration when the options change.
-    await hass.config_entries.async_reload(config_entry.entry_id)
+    # Update the coordinator scan interval dynamically without needing a full integration reload.
+    coordinator = entry.runtime_data.coordinator
+    coordinator.update_interval = timedelta(
+        seconds=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_SECONDS)
+    )
 
 
 async def async_remove_config_entry_device(
-    hass: HomeAssistant, config_entry: ConfigEntry, device_entry: DeviceEntry
+    hass: HomeAssistant, config_entry: ThermoworksConfigEntry, device_entry: DeviceEntry
 ) -> bool:
     """Delete device if selected from UI."""
-    # Adding this function shows the delete device option in the UI.
-    # Remove this function if you do not want that option.
-    # You may need to do some checks here before allowing devices to be removed.
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: ThermoworksConfigEntry) -> bool:
     """Unload a config entry.
 
     This is called when you remove your integration or shutdown HA.
-    If you have created any custom services, they need to be removed here too.
     """
 
     # Remove the config options update listener
-    hass.data[DOMAIN][config_entry.entry_id].cancel_update_listener()
+    entry.runtime_data.cancel_update_listener()
 
     # Unload platforms
     unload_ok = await hass.config_entries.async_unload_platforms(
-        config_entry, PLATFORMS
+        entry, PLATFORMS
     )
 
-    # Remove the config entry from the hass data object.
-    if unload_ok:
-        hass.data[DOMAIN].pop(config_entry.entry_id)
-
-    # Return that unloading was successful.
     return unload_ok

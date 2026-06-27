@@ -28,7 +28,7 @@
   "entity": {
     "sensor": {
       "battery": {
-        "name": "[%key:component::sensor::entity_component::signal::name%]"
+        "name": "[%key:component::sensor::entity_component::battery::name%]"
       },
       "last_seen": {
         "name": "Last Seen"

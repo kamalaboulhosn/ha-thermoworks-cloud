@@ -3,19 +3,18 @@ from collections.abc import Mapping
 import logging
 
 from homeassistant.components.sensor import (
-    ENTITY_ID_FORMAT,
     SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, SIGNAL_STRENGTH_DECIBELS, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers.device_registry import format_mac, DeviceInfo
-from homeassistant.helpers.entity import async_generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, UpdateFailed
+
+from . import ThermoworksConfigEntry
 
 from .const import DOMAIN
 
@@ -35,14 +34,12 @@ _LOGGER: logging.Logger = logging.getLogger(__package__)
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: ThermoworksConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Add sensors for passed config_entry in HA."""
 
-    coordinator: ThermoworksCoordinator = hass.data[DOMAIN][
-        config_entry.entry_id
-    ].coordinator
+    coordinator = config_entry.runtime_data.coordinator
 
     new_entities = []
     for device in coordinator.data.devices:
@@ -51,11 +48,6 @@ async def async_setup_entry(
         if DeviceWithBattery.is_protocol_compliant(device):
             new_entities.append(
                 BatterySensor(
-                    entity_id=async_generate_entity_id(
-                        ENTITY_ID_FORMAT,
-                        f"{device.get_identifier()}_battery",
-                        hass=hass,
-                    ),
                     coordinator=coordinator,
                     device=device,
                 )
@@ -71,11 +63,6 @@ async def async_setup_entry(
         if DeviceWithWifi.is_protocol_compliant(device):
             new_entities.append(
                 SignalSensor(
-                    entity_id=async_generate_entity_id(
-                        ENTITY_ID_FORMAT,
-                        f"{device.get_identifier()}_signal",
-                        hass=hass,
-                    ),
                     coordinator=coordinator,
                     device=device,
                 )
@@ -90,11 +77,6 @@ async def async_setup_entry(
         if DeviceWithLastSeen.is_protocol_compliant(device):
             new_entities.append(
                 LastSeenSensor(
-                    entity_id=async_generate_entity_id(
-                        ENTITY_ID_FORMAT,
-                        f"{device.get_identifier()}_last_seen",
-                        hass=hass,
-                    ),
                     coordinator=coordinator,
                     device=device,
                 )
@@ -109,11 +91,6 @@ async def async_setup_entry(
         if DeviceWithTransmitInterval.is_protocol_compliant(device):
             new_entities.append(
                 TransmitIntervalSensor(
-                    entity_id=async_generate_entity_id(
-                        ENTITY_ID_FORMAT,
-                        f"{device.get_identifier()}_transmit_interval",
-                        hass=hass,
-                    ),
                     coordinator=coordinator,
                     device=device,
                 )
@@ -129,11 +106,6 @@ async def async_setup_entry(
             if device_channel.units == "H":
                 new_entities.append(
                     HumiditySensor(
-                        entity_id=async_generate_entity_id(
-                            ENTITY_ID_FORMAT,
-                            f"{device.get_identifier()}_ch_{device_channel.number}_humidity",
-                            hass=hass,
-                        ),
                         coordinator=coordinator,
                         device_serial=device.get_identifier(),
                         device_channel=device_channel,
@@ -142,11 +114,6 @@ async def async_setup_entry(
             elif device_channel.units in ("F", "C"):
                 new_entities.append(
                     TemperatureSensor(
-                        entity_id=async_generate_entity_id(
-                            ENTITY_ID_FORMAT,
-                            f"{device.get_identifier()}_ch_{device_channel.number}_temperature",
-                            hass=hass,
-                        ),
                         coordinator=coordinator,
                         device_serial=device.get_identifier(),
                         device_channel=device_channel,
@@ -189,13 +156,11 @@ class BatterySensor(CoordinatorEntity[ThermoworksCoordinator], SensorEntity):
 
     def __init__(
         self,
-        entity_id: str,
         coordinator: ThermoworksCoordinator,
         device: DeviceWithBattery,
     ) -> None:
         """Initialise sensor."""
         super().__init__(coordinator)
-        self.entity_id = entity_id
         self._device = device
 
     @callback
@@ -270,12 +235,10 @@ class LastSeenSensor(CoordinatorEntity[ThermoworksCoordinator], SensorEntity):
 
     def __init__(
         self,
-        entity_id: str,
         coordinator: ThermoworksCoordinator,
         device: DeviceWithLastSeen,
     ) -> None:
         super().__init__(coordinator)
-        self.entity_id = entity_id
         self._device = device
 
     @callback
@@ -330,12 +293,10 @@ class TransmitIntervalSensor(CoordinatorEntity[ThermoworksCoordinator], SensorEn
 
     def __init__(
         self,
-        entity_id: str,
         coordinator: ThermoworksCoordinator,
         device: DeviceWithTransmitInterval,
     ) -> None:
         super().__init__(coordinator)
-        self.entity_id = entity_id
         self._device = device
 
     @callback
@@ -388,7 +349,6 @@ class ChannelSensor(CoordinatorEntity[ThermoworksCoordinator], SensorEntity):
 
     def __init__(
         self,
-        entity_id: str,
         coordinator: ThermoworksCoordinator,
         device_serial: str,
         device_channel: ThermoworksChannel,
@@ -396,7 +356,6 @@ class ChannelSensor(CoordinatorEntity[ThermoworksCoordinator], SensorEntity):
         """Initialize the sensor."""
 
         super().__init__(coordinator)
-        self.entity_id = entity_id
         self._device_channel = device_channel
         self._device_serial = device_serial
 
@@ -454,10 +413,7 @@ class ChannelSensor(CoordinatorEntity[ThermoworksCoordinator], SensorEntity):
         """Return unique id."""
         # All entities must have a unique id.  Think carefully what you want this to be as
         # changing it later will cause HA to create new entities.
-        return (
-            f"{DOMAIN}-{format_mac(self._device_serial)
-                        }-{self._device_channel.number}"
-        )
+        return f"{DOMAIN}-{format_mac(self._device_serial)}-{self._device_channel.number}"
 
 class TemperatureSensor(ChannelSensor):
     """Implementation of a thermoworks temperature sensor."""
@@ -479,8 +435,7 @@ class TemperatureSensor(ChannelSensor):
             return UnitOfTemperature.CELSIUS
 
         raise ValueError(
-            f"Unable to determine unit of measurement from unit string '{
-                self._device_channel.units}'"
+            f"Unable to determine unit of measurement from unit string '{self._device_channel.units}'"
         )
 
 
@@ -522,13 +477,11 @@ class SignalSensor(CoordinatorEntity[ThermoworksCoordinator], SensorEntity):
 
     def __init__(
         self,
-        entity_id: str,
         coordinator: ThermoworksCoordinator,
         device: DeviceWithWifi,
     ) -> None:
         """Initialise sensor."""
         super().__init__(coordinator)
-        self.entity_id = entity_id
         self._device = device
 
     @callback
